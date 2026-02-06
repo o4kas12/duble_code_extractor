@@ -5,58 +5,55 @@ import asyncio
 import redis.asyncio as redis
 
 
-line='A1-10'
-cod_gp='31211'
-source_date='2025-06-03'
-batch_date='2025-06-04'
+line_number='TERM1'
+cod_gp='30141'
+source_date='2026-02-05'
+batch_date='2026-02-06'
 verified_status='verified'
 
 # === ЭТАП 1: Извлечение кодов из лога и сохранение обрезков ===
-log_file = 'syslog'
+log_file = 'syslogs/syslog_A1-07'
 duplicates_csv = 'duplicates.csv'
 
-code_pattern = re.compile(r'->(.*?)<-')
-valid_code_pattern = re.compile(r'^[\w\+\-#:]+$')
+code_pattern = re.compile(
+    r'receive on 2000\s+->(.*?)<-'
+)
 
-codes = []
+with open(log_file, 'r', encoding='utf-8') as f, \
+     open(duplicates_csv, 'w', encoding='utf-8', newline='') as csvfile:
 
-with open(log_file, 'r', encoding='utf-8') as f:
     for line in f:
         match = code_pattern.search(line)
-        if match:
-            code = match.group(1).strip()
-            if valid_code_pattern.match(code):
-                codes.append(code)
+        if not match:
+            continue
 
-code_counts = Counter(codes)
+        code = match.group(1).strip()
+        length = len(code)
 
-with open(duplicates_csv, 'w', newline='', encoding='utf-8') as csvfile:
-    writer = csv.writer(csvfile)
+        # Пропускаем первый блок 34 символа
+        if length <= 34:
+            continue  # если всего меньше или ровно 34 — пропускаем всё
 
-    for code, count in code_counts.items():
-        if count > 1 and len(code) > 34:
-            rest = code[34:]  # пропускаем первые 34 символа
-            for i in range(0, len(rest), 34):
-                part = rest[i:i+34]
-                if len(part) == 34:
-                    writer.writerow([part])
+        for i in range(34, length, 34):  # начинаем с 34, чтобы пропустить первый код
+            part = code[i:i+34]
+            csvfile.write(part + '\n')
 
-print(f'Готово. Разобранные задвоенные коды записаны в {duplicates_csv}.')
+
+
+print(f'Готово. Результат записан в {duplicates_csv}')
 
 # === ЭТАП 2: Обработка в part1 / part2 и запись в processed.csv ===
 input_csv = duplicates_csv
 processed_csv = 'processed.csv'
 
 with open(input_csv, 'r', encoding='utf-8') as infile, \
-     open(processed_csv, 'w', encoding='utf-8', newline='') as outfile:
+     open(processed_csv, 'w', encoding='utf-8') as outfile:
 
-    reader = csv.reader(infile)
-    writer = csv.writer(outfile)
-
-    for row in reader:
-        if not row:
+    for line in infile:
+        code = line.strip()
+        if len(code) != 34:
+            print(f'⚠️ Пропуск блока не 34 символа: {code}')
             continue
-        code = row[0].strip()
 
         code_trimmed = code[3:]  # убираем первые 3 символа
 
@@ -65,7 +62,7 @@ with open(input_csv, 'r', encoding='utf-8') as infile, \
         part3 = code_trimmed[27:].replace('#', '')
 
         processed_line = f"{part1} {part2} {part3}"
-        writer.writerow([processed_line])
+        outfile.write(processed_line + '\n')
 
 print(f"Обработка завершена, результат записан в {processed_csv}")
 
@@ -81,22 +78,25 @@ async def add_all_to_redis():
     with open(processed_csv, 'r', encoding='utf-8') as infile, \
          open('result.csv', 'w', encoding='utf-8', newline='') as result_file:
 
-        reader = csv.reader(infile)
-        writer = csv.writer(result_file)
-        writer.writerow(['key (part1)', 'value (part2)', 'SADD result'])  # заголовки
+        # заголовок
+        result_file.write('key (part1),value (part2),SADD result\n')
 
-        for row in reader:
-            if not row:
+        for line in infile:
+            line = line.strip()
+            if not line:
                 continue
-            parts = row[0].split()
+
+            parts = line.split()
             if len(parts) >= 2:
                 key = parts[0]
                 value = parts[1]
+
                 try:
+                    # настоящий SADD
                     result = await r.sadd(key, value)
-                    writer.writerow([key, value, result])
+                    result_file.write(f"{key},{value},{result}\n")
                 except Exception as e:
-                    writer.writerow([key, value, f"ERROR: {e}"])
+                    result_file.write(f"{key},{value},ERROR: {e}\n")
 
     await r.close()
     await r.connection_pool.disconnect()
