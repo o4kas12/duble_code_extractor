@@ -3,16 +3,25 @@ import csv
 from collections import Counter
 import asyncio
 import redis.asyncio as redis
+import psycopg2
 
 
-line_number='TERM1'
-cod_gp='30141'
-source_date='2026-02-05'
-batch_date='2026-02-06'
+line_number='TERM3'
+cod_gp='31516'
+source_date='2026-05-07'
+batch_date='2026-05-08'
 verified_status='verified'
 
+DB_CONFIG = {
+    "host": "10.10.3.109",
+    "port": 5432,
+    "dbname": "molzavod",
+    "user": "postgres",
+    "password": "111111"
+}
+
 # === ЭТАП 1: Извлечение кодов из лога и сохранение обрезков ===
-log_file = 'syslogs/syslog_A1-07'
+log_file = 'syslogs_2026-05-07/syslog_A3-01'
 duplicates_csv = 'duplicates.csv'
 
 code_pattern = re.compile(
@@ -65,6 +74,44 @@ with open(input_csv, 'r', encoding='utf-8') as infile, \
         outfile.write(processed_line + '\n')
 
 print(f"Обработка завершена, результат записан в {processed_csv}")
+
+# Выводим количество gtin'ов в processed.csv для проверки
+counter = Counter()
+
+with open(processed_csv, "r", encoding="utf-8") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+
+        gtin = line.split()[0]  # первое значение в строке
+        counter[gtin] += 1
+
+conn = psycopg2.connect(**DB_CONFIG)
+cursor = conn.cursor()
+
+query = """
+    SELECT cod_gp, name_gp
+    FROM nsi.s_gpr
+    WHERE shtx = %s AND cod_gp LIKE '31%%'
+"""
+
+# 3. Обрабатываем все GTIN
+for gtin, count in counter.items():
+    print(f"\nGTIN {gtin} — {count} раз")
+
+    cursor.execute(query, (gtin,))
+    results = cursor.fetchall()
+
+    if results:
+        for row in results:
+            print(f"  cod_gp = {row[0]}, name_gp = {row[1]}")
+    else:
+        print("  совпадений нет")
+
+# 4. Закрываем соединение
+cursor.close()
+conn.close()
 
 # === ЭТАП 3: Добавление в Redis из processed.csv с логом в result.csv ===
 async def add_all_to_redis():

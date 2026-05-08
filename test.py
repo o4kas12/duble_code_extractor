@@ -1,7 +1,10 @@
 import csv
 import psycopg2
 import script
+import requests
 
+
+# тестовая функция чтобы посмотреть sql запрос
 def insert_to_postgres_mock():
     with open('processed.csv', 'r', encoding='utf-8') as infile:
         reader = csv.reader(infile)
@@ -26,6 +29,9 @@ def insert_to_postgres_mock():
                         '{script.source_date}', '{script.batch_date}', '{script.verified_status}');
                 """
             print(sql_text.strip())  # выводим запрос в консоль
+    print(gtin)
+    send_post_to_116(gtin)
+
 
 def insert_to_postgres():
     conn = psycopg2.connect(
@@ -66,6 +72,36 @@ def insert_to_postgres():
     cursor.close()
     conn.close()
     print("Данные успешно записаны в PostgreSQL.")
+    print("gtin = ", gtin)
+    send_post_to_116(gtin)
+
+def send_post_to_116(gtin):
+    url = "http://10.10.3.116:6200/request/marking/marking_line/MarkingLine/get_info_line?session=15"
+
+    payload = {
+    "markstation_id": script.line_number,
+    "source_date": script.source_date,
+    "good_codes": script.counter[gtin],
+    "defect_codes": 0,
+    "total_codes": script.counter[gtin],
+    "duplicates_codes": 0,
+    "current_gtin": gtin,
+    "current_cod_gp": script.cod_gp,
+    "current_batch_date": script.batch_date,
+    "plc_state": {}
+    }
+
+    print(payload)
+
+    # POST запрос
+    response = requests.post(
+        url,
+        json=payload
+    )
+
+    # Вывод результата
+    print(f"STATUS: {response.status_code}")
+    print(response.text)
 
 if __name__ == '__main__':
     insert_to_postgres()
